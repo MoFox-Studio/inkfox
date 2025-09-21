@@ -74,19 +74,29 @@ jobs:
           key: ${{ runner.os }}-target-${{ matrix.python-version }}-${{ hashFiles('Cargo.lock', 'pyproject.toml') }}
       - name: Install maturin
         run: pip install maturin
-      - name: Build wheels
-        run: maturin build --release --compatibility manylinux_2_28
+      # 使用官方 maturin action 在 manylinux 容器内构建，确保 GLIBC 符号合规
+      - name: Build wheels (Linux manylinux container)
         if: runner.os == 'Linux'
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          # 输出目录改为 dist，后续 artifact 上传使用通配
+          args: --release --out dist
+          manylinux: 2_28
+          python-version: ${{ matrix.python-version }}
       - name: Build wheels (non-linux)
         run: maturin build --release
         if: runner.os != 'Linux'
       - name: Show wheels
-        run: ls -R target/wheels || dir target\wheels
+        run: |
+          (ls -R dist 2>/dev/null || true) && (ls -R target/wheels 2>/dev/null || true) || (dir dist 2> NUL || dir target\wheels 2> NUL)
       - name: Upload wheels artifact
         uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}-py${{ matrix.python-version }}
-          path: target/wheels/*.whl
+          path: |
+            dist/*.whl
+            target/wheels/*.whl
 
   release:
     name: GitHub Release (auto on push)
