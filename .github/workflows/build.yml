@@ -15,6 +15,8 @@ jobs:
   cargo-check:
     name: Rust Check & Test
     runs-on: ${{ matrix.os }}
+    env:
+      PYO3_PYTHON: python
     strategy:
       fail-fast: false
       matrix:
@@ -22,12 +24,18 @@ jobs:
         rust: [stable]
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
+      - name: Set up Python (for pyo3 build script)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify Python
+        run: python -c "import sys,platform;print(sys.version);print(platform.platform())"
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ matrix.rust }}
-          profile: minimal
-          override: true
+      - name: Rust version
+        run: rustc -V && cargo -V
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -48,7 +56,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.12", "3.13"]
+        python-version: ["3.13"]
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -72,7 +80,7 @@ jobs:
         with:
           path: target
           key: ${{ runner.os }}-target-${{ matrix.python-version }}-${{ hashFiles('Cargo.lock', 'pyproject.toml') }}
-      - name: Install maturin
+      - name: Install maturin (non-Linux reuse)
         run: pip install maturin
       # 使用官方 maturin action 在 manylinux 容器内构建，确保 GLIBC 符号合规
       - name: Build wheels (Linux manylinux container)
@@ -80,20 +88,25 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: build
-          # 输出目录改为 dist，后续 artifact 上传使用通配
           args: --release --out dist
           manylinux: 2_28
-          python-version: ${{ matrix.python-version }}
       - name: Build wheels (non-linux)
-        run: maturin build --release
         if: runner.os != 'Linux'
+        run: maturin build --release --out dist
       - name: Show wheels
         run: |
-          (ls -R dist 2>/dev/null || true) && (ls -R target/wheels 2>/dev/null || true) || (dir dist 2> NUL || dir target\wheels 2> NUL)
+          echo "Listing dist:";
+          (ls -R dist 2>/dev/null || true) || (dir dist 2> NUL || true)
+          echo "Listing target/wheels:";
+          (ls -R target/wheels 2>/dev/null || true) || (dir target\wheels 2> NUL || true)
+      - name: Smoke test import (abi3)
+        run: |
+          pip install --no-index --find-links dist inkfox || pip install --no-index --find-links target/wheels inkfox
+          python -c "import inkfox,sys;print('Imported inkfox version:', getattr(inkfox,'__version__','unknown'));print('ABI3 smoke OK')"
       - name: Upload wheels artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}-py${{ matrix.python-version }}
+          name: wheels-${{ matrix.os }}-abi3
           path: |
             dist/*.whl
             target/wheels/*.whl
