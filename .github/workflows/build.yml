@@ -15,147 +15,156 @@ jobs:
   cargo-check:
     name: Rust Check & Test
     runs-on: ${{ matrix.os }}
-    env:
-      PYO3_PYTHON: python
-    strategy:
-      fail-fast: false
-      matrix:
-  os: [ubuntu-latest, windows-latest]
-  rust: [stable]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python (for pyo3 build script)
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Verify Python
-        run: python -c "import sys,platform;print(sys.version);print(platform.platform())"
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ matrix.rust }}
-      - name: Rust version
-        run: rustc -V && cargo -V
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      - name: Check (no linking final artifact)
-        run: cargo check --all --verbose
-      - name: Run tests
-        run: cargo test --all --verbose --no-fail-fast || echo "No Rust tests or ignoring Python linking failures"
+    name: CI Build
 
-  build-wheels:
-    name: Python Wheels (maturin)
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-  os: [ubuntu-latest, windows-latest]
-  python-version: ["3.13"]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
-      - name: Cache cargo registry & git
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
-      - name: Cache target incremental build
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-target-${{ matrix.python-version }}-${{ hashFiles('Cargo.lock', 'pyproject.toml') }}
-      - name: Install maturin (non-Linux reuse)
-        run: pip install maturin
-      # 使用官方 maturin action 在 manylinux 容器内构建，确保 GLIBC 符号合规
-      - name: Build wheels (Linux manylinux container)
-        if: runner.os == 'Linux'
-        uses: PyO3/maturin-action@v1
-        with:
-          command: build
-          args: --release --out dist
-          manylinux: 2_28
-      - name: Build wheels (non-linux)
-        if: runner.os != 'Linux'
-        run: maturin build --release --out dist
-      - name: Show wheels
-        run: |
-          echo "Listing dist:";
-          (ls -R dist 2>/dev/null || true) || (dir dist 2> NUL || true)
-          echo "Listing target/wheels:";
-          (ls -R target/wheels 2>/dev/null || true) || (dir target\wheels 2> NUL || true)
-      - name: Smoke test import (abi3)
-        run: |
-          pip install --no-index --find-links dist inkfox || pip install --no-index --find-links target/wheels inkfox
-          python -c "import inkfox,sys;print('Imported inkfox version:', getattr(inkfox,'__version__','unknown'));print('ABI3 smoke OK')"
-      - name: Upload wheels artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels-${{ matrix.os }}-abi3
-          path: |
-            dist/*.whl
-            target/wheels/*.whl
+    on:
+      push:
+        branches: [ main, master, dev ]
+        tags: [ 'v*' ]
+      pull_request:
+        branches: [ main, master, dev ]
+      workflow_dispatch: {}
 
-  release:
-    name: GitHub Release (auto on push)
-    needs: [cargo-check, build-wheels]
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
     permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: wheels-*
-          merge-multiple: true
-          path: dist
-      - name: Display structure
-        run: ls -R dist
-      - name: Create release
-        uses: softprops/action-gh-release@v2
-        with:
-            tag_name: auto-${{ github.run_number }}
-            name: Auto Build ${{ github.run_number }}
-            draft: false
-            prerelease: true
-            files: dist/**/**/*.whl
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      contents: read
 
-  publish-pypi:
-    name: Publish PyPI (auto on push)
-    needs: build-wheels
-    if: github.event_name == 'push' && contains(fromJson('["refs/heads/main","refs/heads/master","refs/heads/dev"]'), github.ref)
-    runs-on: ubuntu-latest
-    environment: pypi
-    steps:
-      - name: Download all wheels
-        uses: actions/download-artifact@v4
-        with:
-          pattern: wheels-*
-          merge-multiple: true
-          path: dist
-      - name: List wheels
-        run: ls -1 dist
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist
-          skip-existing: true
-          verbose: true
-          password: ${{ secrets.PYPI_API_TOKEN }}
+    jobs:
+      cargo-check:
+        name: Rust Check & Test
+        runs-on: ${{ matrix.os }}
+        env:
+          PYO3_PYTHON: python
+        strategy:
+          fail-fast: false
+          matrix:
+            os: [ubuntu-latest, windows-latest]
+            rust: [stable]
+        steps:
+          - uses: actions/checkout@v4
+          - name: Set up Python
+            uses: actions/setup-python@v5
+            with:
+              python-version: '3.12'
+          - name: Install Rust toolchain
+            uses: dtolnay/rust-toolchain@stable
+            with:
+              toolchain: ${{ matrix.rust }}
+          - name: Show versions
+            run: rustc -V && cargo -V && python -V
+          - name: Cache cargo
+            uses: actions/cache@v4
+            with:
+              path: |
+                ~/.cargo/registry
+                ~/.cargo/git
+                target
+              key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          - name: Cargo check
+            run: cargo check --all --verbose
+          - name: Cargo tests
+            run: cargo test --all --verbose --no-fail-fast || echo "Tests skipped or failed (non-blocking)"
+
+      build-wheels:
+        name: Build abi3 wheels
+        runs-on: ${{ matrix.os }}
+        strategy:
+          fail-fast: false
+          matrix:
+            os: [ubuntu-latest, windows-latest]
+            python-version: [ '3.13' ]
+        steps:
+          - uses: actions/checkout@v4
+          - name: Set up Python
+            uses: actions/setup-python@v5
+            with:
+              python-version: ${{ matrix.python-version }}
+          - name: Cache pip
+            uses: actions/cache@v4
+            with:
+              path: ~/.cache/pip
+              key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
+          - name: Cache cargo registry
+            uses: actions/cache@v4
+            with:
+              path: |
+                ~/.cargo/registry
+                ~/.cargo/git
+              key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          - name: Cache target
+            uses: actions/cache@v4
+            with:
+              path: target
+              key: ${{ runner.os }}-target-${{ matrix.python-version }}-${{ hashFiles('Cargo.lock', 'pyproject.toml') }}
+          - name: Install maturin
+            run: pip install maturin
+          - name: Build wheels (Linux manylinux)
+            if: runner.os == 'Linux'
+            uses: PyO3/maturin-action@v1
+            with:
+              command: build
+              args: --release --out dist
+              manylinux: 2_28
+          - name: Build wheels (Windows)
+            if: runner.os == 'Windows'
+            run: maturin build --release --out dist
+          - name: List wheels
+            run: |
+              echo Dist:; ls dist || dir dist
+          - name: Smoke import
+            run: |
+              pip install --no-index --find-links dist inkfox
+              python -c "import inkfox;print('inkfox import ok')"
+          - name: Upload wheels
+            uses: actions/upload-artifact@v4
+            with:
+              name: wheels-${{ matrix.os }}-abi3
+              path: dist/*.whl
+
+      release:
+        name: GitHub Release (auto on push)
+        needs: [cargo-check, build-wheels]
+        if: github.event_name == 'push'
+        runs-on: ubuntu-latest
+        permissions:
+          contents: write
+        steps:
+          - uses: actions/download-artifact@v4
+            with:
+              pattern: wheels-*
+              merge-multiple: true
+              path: dist
+          - name: Display dist
+            run: ls -R dist
+          - name: Create release
+            uses: softprops/action-gh-release@v2
+            with:
+              tag_name: auto-${{ github.run_number }}
+              name: Auto Build ${{ github.run_number }}
+              draft: false
+              prerelease: true
+              files: dist/**/*.whl
+            env:
+              GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      publish-pypi:
+        name: Publish PyPI (auto on push)
+        needs: build-wheels
+        if: github.event_name == 'push' && contains(fromJson('["refs/heads/main","refs/heads/master","refs/heads/dev"]'), github.ref)
+        runs-on: ubuntu-latest
+        environment: pypi
+        steps:
+          - name: Download wheels
+            uses: actions/download-artifact@v4
+            with:
+              pattern: wheels-*
+              merge-multiple: true
+              path: dist
+          - name: List wheels
+            run: ls -1 dist
+          - name: Publish
+            uses: pypa/gh-action-pypi-publish@release/v1
+            with:
+              packages-dir: dist
+              skip-existing: true
+              verbose: true
+              password: ${{ secrets.PYPI_API_TOKEN }}
