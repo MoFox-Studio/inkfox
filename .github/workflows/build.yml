@@ -21,7 +21,7 @@ jobs:
       fail-fast: false
       matrix:
   os: [ubuntu-latest, windows-latest]
-        rust: [stable]
+  rust: [stable]
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python (for pyo3 build script)
@@ -56,7 +56,7 @@ jobs:
       fail-fast: false
       matrix:
   os: [ubuntu-latest, windows-latest]
-        python-version: ["3.13"]
+  python-version: ["3.13"]
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
