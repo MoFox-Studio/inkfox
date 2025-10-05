@@ -1,11 +1,24 @@
+//! inkfox: PyO3 绑定。遵循官方文档简洁模式：使用 `add_submodule` 让解释器注册子模块。
+//! 不再显式写 `sys.modules`，保持最小实现，便于排查问题。
+
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
 use pyo3::wrap_pyfunction;
 
-pub mod video; // 内部实现模块 (frame/performance/extractor/utils) — 已由 core 重命名为 video
+pub mod memory;
+pub use memory::PyMetadataIndex;
+
+pub mod video; // 视频相关
 pub use video::{PyPerformanceResult, PyVideoFrame, VideoKeyframeExtractor};
 
-// ---------------- Convenience PyFunctions (将注册到子模块 video) ----------------
+// -------------------------------------------------------------------------------------------------
+// 辅助：创建并注册子模块
+// -------------------------------------------------------------------------------------------------
+// 官方模式：直接 new 子模块 -> add_submodule；解释器会完成合适注册。
+
+// -------------------------------------------------------------------------------------------------
+// 辅助函数: 便捷调用
+// -------------------------------------------------------------------------------------------------
 #[pyfunction]
 #[pyo3(signature = (video_path, output_dir, max_keyframes, max_save=None, ffmpeg_path=None, use_simd=None, threads=None, verbose=None, block_size=None))]
 fn extract_keyframes_from_video(
@@ -28,9 +41,9 @@ fn extract_keyframes_from_video(
         video_path,
         output_dir,
         max_keyframes,
-        max_save,      // max_save
-        use_simd,      // use_simd
-        block_size     // block_size
+        max_save,
+        use_simd,
+        block_size
     )
 }
 
@@ -51,54 +64,80 @@ fn get_system_info(py: Python<'_>) -> PyResult<Py<PyDict>> {
     Ok(dict.into())
 }
 
-// ---------------- 顶层模块 inkfox (导出子模块 video) ----------------
+// -------------------------------------------------------------------------------------------------
+// 顶层模块
+// -------------------------------------------------------------------------------------------------
 #[pymodule]
 fn inkfox(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    // 创建子模块 video
+    // 顶层直接暴露的类型与函数（兼容旧使用方式）
+    m.add_class::<PyVideoFrame>()?;
+    m.add_class::<PyPerformanceResult>()?;
+    m.add_class::<VideoKeyframeExtractor>()?;
+    m.add_class::<PyMetadataIndex>()?;
+    m.add_function(wrap_pyfunction!(extract_keyframes_from_video, m.clone())?)?;
+    m.add_function(wrap_pyfunction!(get_system_info, m.clone())?)?;
+
+    // 子模块: video
     let video_mod = PyModule::new_bound(py, "video")?;
     video_mod.add_class::<PyVideoFrame>()?;
     video_mod.add_class::<PyPerformanceResult>()?;
     video_mod.add_class::<VideoKeyframeExtractor>()?;
-    video_mod.add_function(wrap_pyfunction!(extract_keyframes_from_video, video_mod.clone())?)?;
-    video_mod.add_function(wrap_pyfunction!(get_system_info, video_mod.clone())?)?;
+    video_mod.setattr("extract_keyframes_from_video", m.getattr("extract_keyframes_from_video")?)?;
+    video_mod.setattr("get_system_info", m.getattr("get_system_info")?)?;
+    let video_all = PyList::new_bound(py, [
+        "PyVideoFrame",
+        "PyPerformanceResult",
+        "VideoKeyframeExtractor",
+        "extract_keyframes_from_video",
+        "get_system_info",
+    ]);
+    video_mod.setattr("__all__", video_all)?;
+    m.add_submodule(&video_mod)?;
 
-    // 将子模块挂载到顶层 inkfox，并显式设置属性（部分环境 add_submodule 后属性缺失时冗余保障）
-    m.add_submodule(&video_mod)?; // 等价于 m.add("video", &video_mod)
-    if m.getattr("video").is_err() {
-        m.setattr("video", &video_mod)?; // 保险：确保 inkfox.video 可访问
+    // 子模块: memory
+    let memory_mod = PyModule::new_bound(py, "memory")?;
+    memory_mod.add_class::<PyMetadataIndex>()?;
+    let memory_all = PyList::new_bound(py, ["PyMetadataIndex"]);
+    memory_mod.setattr("__all__", memory_all)?;
+    m.add_submodule(&memory_mod)?;
+
+    // 将顶层扩展标记为“包”以允许 `import inkfox.memory` 查找机制通过 (需要 __path__)
+    if m.getattr("__path__").is_err() {
+        // 空列表表示“命名空间”式包即可让 import machinery 继续解析子模块
+        let empty: [&str; 0] = [];
+        let path_list = PyList::new_bound(py, empty);
+        m.setattr("__path__", path_list)?;
     }
 
-    // 同时注册到 sys.modules，保证 "import inkfox.video" 以及工具链解析正常
-    if let Ok(sys) = PyModule::import_bound(py, "sys") {
-        if let Ok(modules_any) = sys.getattr("modules") {
-            if let Ok(modules_dict) = modules_any.downcast::<PyDict>() {
-                // 忽略设置失败（例如只读）——不影响核心功能
-                let _ = modules_dict.set_item("inkfox.video", &video_mod);
+    //（最小必要）把子模块写入 sys.modules，避免某些解释器版本在首次 import inkfox 后再 import inkfox.memory 时重新查找失败
+    if let Ok(sys) = py.import_bound("sys") {
+        if let Ok(modules) = sys.getattr("modules") {
+            if let Ok(mods) = modules.downcast::<PyDict>() {
+                let _ = mods.set_item("inkfox.video", &video_mod);
+                let _ = mods.set_item("inkfox.memory", &memory_mod);
             }
         }
     }
 
-    // 直接在顶层再导出关键类型与函数，防止某些打包场景下无法访问子模块属性
-    m.add_class::<PyVideoFrame>()?;
-    m.add_class::<PyPerformanceResult>()?;
-    m.add_class::<VideoKeyframeExtractor>()?;
-    m.add_function(wrap_pyfunction!(extract_keyframes_from_video, m.clone())?)?;
-    m.add_function(wrap_pyfunction!(get_system_info, m.clone())?)?;
+    // 修正类型 __module__ 到各自子模块
+    // 保持类型 __module__ 到子模块（官方文档中可选增强，不影响功能）
+    py.get_type_bound::<PyVideoFrame>().setattr("__module__", "inkfox.video").ok();
+    py.get_type_bound::<PyPerformanceResult>().setattr("__module__", "inkfox.video").ok();
+    py.get_type_bound::<VideoKeyframeExtractor>().setattr("__module__", "inkfox.video").ok();
+    py.get_type_bound::<PyMetadataIndex>().setattr("__module__", "inkfox.memory").ok();
 
-    // 提供一个 helper 使得 inkfox.video 如果加载失败可以重新生成
-    #[pyfn(m)]
-    fn ensure_video_submodule(py: Python<'_>, parent: &Bound<'_, PyModule>) -> PyResult<()> {
-        if parent.getattr("video").is_err() {
-            let vm = PyModule::new_bound(py, "video")?;
-            vm.add_class::<PyVideoFrame>()?;
-            vm.add_class::<PyPerformanceResult>()?;
-            vm.add_class::<VideoKeyframeExtractor>()?;
-            vm.add_function(wrap_pyfunction!(extract_keyframes_from_video, vm.clone())?)?;
-            vm.add_function(wrap_pyfunction!(get_system_info, vm.clone())?)?;
-            parent.add_submodule(&vm)?;
-        }
-        Ok(())
-    }
+    // 顶层 __all__
+    let top_all = PyList::new_bound(py, [
+        "PyMetadataIndex",
+        "PyVideoFrame",
+        "PyPerformanceResult",
+        "VideoKeyframeExtractor",
+        "extract_keyframes_from_video",
+        "get_system_info",
+        "video",
+        "memory",
+    ]);
+    m.setattr("__all__", top_all)?;
 
     Ok(())
 }
