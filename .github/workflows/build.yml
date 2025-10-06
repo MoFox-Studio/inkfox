@@ -53,8 +53,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
-        python-version: ['3.13']   # abi3-py311 构建用单一高版本解释器即可
+        include:
+          # Linux x86_64
+          - os: ubuntu-latest
+            python-version: '3.13'
+            arch: x86_64
+          # Linux aarch64 (cross build via maturin action + target)
+          - os: ubuntu-latest
+            python-version: '3.13'
+            arch: aarch64
+          # Windows x86_64
+          - os: windows-latest
+            python-version: '3.13'
+            arch: x86_64
+          # macOS arm64 (native build on Apple Silicon runner)
+          - os: macos-14
+            python-version: '3.13'
+            arch: arm64
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -65,42 +80,61 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-pip-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-${{ hashFiles('Cargo.lock') }}
       - name: Cache target
         uses: actions/cache@v4
         with:
           path: target
-          key: ${{ runner.os }}-target-${{ matrix.python-version }}-${{ hashFiles('Cargo.lock', 'pyproject.toml') }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-${{ matrix.python-version }}-${{ hashFiles('Cargo.lock', 'pyproject.toml') }}
       - name: Install maturin
         run: pip install maturin
-      - name: Build wheels (Linux manylinux)
-        if: runner.os == 'Linux'
+      - name: Add Rust target for aarch64 (Linux cross)
+        if: runner.os == 'Linux' && matrix.arch == 'aarch64'
+        run: |
+          rustup target add aarch64-unknown-linux-gnu
+          sudo apt-get update -y
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Build wheels (Linux x86_64)
+        if: runner.os == 'Linux' && matrix.arch == 'x86_64'
         uses: PyO3/maturin-action@v1
         with:
           command: build
           args: --release --out dist
           manylinux: 2_28
-      - name: Build wheels (Windows)
+      - name: Build wheels (Linux aarch64 cross)
+        if: runner.os == 'Linux' && matrix.arch == 'aarch64'
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          target: aarch64-unknown-linux-gnu
+          args: --release --out dist --target aarch64-unknown-linux-gnu
+          manylinux: 2_28
+      - name: Build wheels (Windows x86_64)
         if: runner.os == 'Windows'
+        run: maturin build --release --out dist
+      - name: Build wheels (macOS arm64)
+        if: runner.os == 'macOS'
         run: maturin build --release --out dist
       - name: List wheels
         run: |
           echo Dist:; ls dist || dir dist
       - name: Smoke import
+        # 仅在非交叉构建环境执行，Linux aarch64 交叉构建的 wheel 无法在 x86_64 运行器上导入
+        if: !(runner.os == 'Linux' && matrix.arch == 'aarch64')
         run: |
           pip install --no-index --find-links dist inkfox
           python -c "import inkfox;print('inkfox import ok')"
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}-abi3
+          name: wheels-${{ matrix.os }}-${{ matrix.arch }}-abi3
           path: dist/*.whl
 
   release:
