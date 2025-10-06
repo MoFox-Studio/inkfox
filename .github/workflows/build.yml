@@ -127,7 +127,8 @@ jobs:
           echo Dist:; ls dist || dir dist
       - name: Smoke import
         # 仅在非交叉构建环境执行，Linux aarch64 交叉构建的 wheel 无法在 x86_64 运行器上导入
-        if: !(runner.os == 'Linux' && matrix.arch == 'aarch64')
+        # 不能使用以 ! 开头的表达式，否则会被 YAML 解析为 tag，改写为等价逻辑表达式
+        if: runner.os != 'Linux' || matrix.arch != 'aarch64'
         run: |
           pip install --no-index --find-links dist inkfox
           python -c "import inkfox;print('inkfox import ok')"
