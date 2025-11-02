@@ -30,12 +30,12 @@ fn extract_keyframes_from_video(
     use_simd: Option<bool>,
     threads: Option<usize>,
     verbose: Option<bool>,
-    block_size: Option<usize>
+    block_size: Option<usize>,
 ) -> PyResult<PyPerformanceResult> {
     let extractor = VideoKeyframeExtractor::new(
         ffmpeg_path.unwrap_or_else(|| "ffmpeg".to_string()),
         threads.unwrap_or(0),
-        verbose.unwrap_or(false)
+        verbose.unwrap_or(false),
     )?;
     extractor.process_video(
         video_path,
@@ -43,7 +43,7 @@ fn extract_keyframes_from_video(
         max_keyframes,
         max_save,
         use_simd,
-        block_size
+        block_size,
     )
 }
 
@@ -82,8 +82,8 @@ fn inkfox(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     video_mod.add_class::<PyVideoFrame>()?;
     video_mod.add_class::<PyPerformanceResult>()?;
     video_mod.add_class::<VideoKeyframeExtractor>()?;
-    video_mod.setattr("extract_keyframes_from_video", m.getattr("extract_keyframes_from_video")?)?;
-    video_mod.setattr("get_system_info", m.getattr("get_system_info")?)?;
+    video_mod.add_function(wrap_pyfunction!(extract_keyframes_from_video, m.clone())?)?;
+    video_mod.add_function(wrap_pyfunction!(get_system_info, m.clone())?)?;
     let video_all = PyList::new_bound(py, [
         "PyVideoFrame",
         "PyPerformanceResult",
@@ -101,26 +101,10 @@ fn inkfox(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     memory_mod.setattr("__all__", memory_all)?;
     m.add_submodule(&memory_mod)?;
 
-    // 将顶层扩展标记为“包”以允许 `import inkfox.memory` 查找机制通过 (需要 __path__)
-    if m.getattr("__path__").is_err() {
-        // 空列表表示“命名空间”式包即可让 import machinery 继续解析子模块
-        let empty: [&str; 0] = [];
-        let path_list = PyList::new_bound(py, empty);
-        m.setattr("__path__", path_list)?;
-    }
-
-    //（最小必要）把子模块写入 sys.modules，避免某些解释器版本在首次 import inkfox 后再 import inkfox.memory 时重新查找失败
-    if let Ok(sys) = py.import_bound("sys") {
-        if let Ok(modules) = sys.getattr("modules") {
-            if let Ok(mods) = modules.downcast::<PyDict>() {
-                let _ = mods.set_item("inkfox.video", &video_mod);
-                let _ = mods.set_item("inkfox.memory", &memory_mod);
-            }
-        }
-    }
+    // 设置 __path__ 为 None，表示命名空间包
+    m.setattr("__path__", py.None())?;
 
     // 修正类型 __module__ 到各自子模块
-    // 保持类型 __module__ 到子模块（官方文档中可选增强，不影响功能）
     py.get_type_bound::<PyVideoFrame>().setattr("__module__", "inkfox.video").ok();
     py.get_type_bound::<PyPerformanceResult>().setattr("__module__", "inkfox.video").ok();
     py.get_type_bound::<VideoKeyframeExtractor>().setattr("__module__", "inkfox.video").ok();
@@ -134,8 +118,6 @@ fn inkfox(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
         "VideoKeyframeExtractor",
         "extract_keyframes_from_video",
         "get_system_info",
-        "video",
-        "memory",
     ]);
     m.setattr("__all__", top_all)?;
 
