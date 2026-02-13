@@ -11,6 +11,8 @@ pub use memory::PyMetadataIndex;
 pub mod video; // 视频相关
 pub use video::{PyPerformanceResult, PyVideoFrame, VideoKeyframeExtractor};
 
+pub mod security; // 安全相关
+
 // -------------------------------------------------------------------------------------------------
 // 辅助：创建并注册子模块
 // -------------------------------------------------------------------------------------------------
@@ -101,6 +103,9 @@ fn inkfox(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     memory_mod.setattr("__all__", memory_all)?;
     m.add_submodule(&memory_mod)?;
 
+    // 子模块: security
+    security::register_security_module(py, m)?;
+
     // 将顶层扩展标记为“包”以允许 `import inkfox.memory` 查找机制通过 (需要 __path__)
     if m.getattr("__path__").is_err() {
         // 空列表表示“命名空间”式包即可让 import machinery 继续解析子模块
@@ -115,6 +120,10 @@ fn inkfox(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
             if let Ok(mods) = modules.downcast::<PyDict>() {
                 let _ = mods.set_item("inkfox.video", &video_mod);
                 let _ = mods.set_item("inkfox.memory", &memory_mod);
+                // 获取 security 模块并注册
+                if let Ok(security_mod) = m.getattr("security") {
+                    let _ = mods.set_item("inkfox.security", security_mod);
+                }
             }
         }
     }
@@ -136,6 +145,7 @@ fn inkfox(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
         "get_system_info",
         "video",
         "memory",
+        "security",
     ]);
     m.setattr("__all__", top_all)?;
 
