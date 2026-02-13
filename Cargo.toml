@@ -1,8 +1,8 @@
 [package]
 name = "inkfox"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
-authors = ["VideoAnalysis Team"]
+authors = ["MoFox-Team"]
 description = "Ultra-fast video keyframe extraction tool in Rust"
 license = "MIT"
 
