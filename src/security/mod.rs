@@ -4,12 +4,9 @@
 //! 以及基于 HMAC-SHA256 的密钥验证机制。
 
 use pyo3::prelude::*;
-use pyo3::wrap_pyfunction;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::sync::Mutex;
-use once_cell::sync::Lazy;
 
 /// 生成加密安全的 API 密钥
 ///
@@ -70,59 +67,29 @@ pub fn generate_timestamped_api_key(length: usize) -> PyResult<String> {
     Ok(format!("{}_{}", timestamp, encoded))
 }
 
-// Rust侧维护的全局密钥列表（明文）
-static API_KEYS: Lazy<Mutex<Vec<String>>> = Lazy::new(|| Mutex::new(Vec::new()));
-
-/// 向 Rust 全局密钥列表添加密钥（明文）
+/// 验证 API 密钥
+///
+/// # Arguments
+///
+/// * `api_key` - 待验证的密钥
+/// * `valid_keys` - 有效密钥列表
+///
+/// # Returns
+///
+/// 如果密钥有效返回 true，否则返回 false
 #[pyfunction]
-pub fn add_api_key(key: &str) -> PyResult<()> {
-    let mut guard = API_KEYS.lock().map_err(|e| {
-        pyo3::exceptions::PyRuntimeError::new_err(format!("锁定失败: {}", e))
-    })?;
-    guard.push(key.to_string());
-    Ok(())
-}
-
-/// 清空所有 Rust 中保存的密钥
-#[pyfunction]
-pub fn clear_api_keys() -> PyResult<()> {
-    let mut guard = API_KEYS.lock().map_err(|e| {
-        pyo3::exceptions::PyRuntimeError::new_err(format!("锁定失败: {}", e))
-    })?;
-    guard.clear();
-    Ok(())
-}
-
-/// 列出当前密钥的哈希（用于展示，不返回明文）
-#[pyfunction]
-pub fn list_api_key_hashes() -> PyResult<Vec<String>> {
-    let guard = API_KEYS.lock().map_err(|e| {
-        pyo3::exceptions::PyRuntimeError::new_err(format!("锁定失败: {}", e))
-    })?;
-    let mut out = Vec::with_capacity(guard.len());
-    for k in guard.iter() {
-        let mut hasher = Sha256::new();
-        hasher.update(k.as_bytes());
-        out.push(hex::encode(hasher.finalize_reset()));
-    }
-    Ok(out)
-}
-
-/// 验证 API 密钥（在 Rust 全局密钥列表中查找）
-#[pyfunction]
-pub fn verify_api_key(api_key: &str) -> PyResult<bool> {
+pub fn verify_api_key(api_key: &str, valid_keys: Vec<String>) -> PyResult<bool> {
     if api_key.is_empty() {
         return Ok(false);
     }
 
-    let guard = API_KEYS.lock().map_err(|e| {
-        pyo3::exceptions::PyRuntimeError::new_err(format!("锁定失败: {}", e))
-    })?;
-    for valid_key in guard.iter() {
+    // 使用常量时间比较，防止时序攻击
+    for valid_key in valid_keys.iter() {
         if constant_time_compare(api_key.as_bytes(), valid_key.as_bytes()) {
             return Ok(true);
         }
     }
+
     Ok(false)
 }
 
@@ -191,9 +158,6 @@ pub fn register_security_module(py: Python<'_>, parent_module: &Bound<'_, PyModu
     
     security_mod.add_function(wrap_pyfunction!(generate_api_key, &security_mod)?)?;
     security_mod.add_function(wrap_pyfunction!(generate_timestamped_api_key, &security_mod)?)?;
-    security_mod.add_function(wrap_pyfunction!(add_api_key, &security_mod)?)?;
-    security_mod.add_function(wrap_pyfunction!(clear_api_keys, &security_mod)?)?;
-    security_mod.add_function(wrap_pyfunction!(list_api_key_hashes, &security_mod)?)?;
     security_mod.add_function(wrap_pyfunction!(verify_api_key, &security_mod)?)?;
     security_mod.add_function(wrap_pyfunction!(hash_api_key, &security_mod)?)?;
     security_mod.add_function(wrap_pyfunction!(verify_api_key_hash, &security_mod)?)?;
